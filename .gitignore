@@ -1,0 +1,4 @@
+build/
+bin2uf2/bin2uf2
+bin2uf2/bin2uf2.o
+*.code-workspace
