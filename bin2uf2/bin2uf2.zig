@@ -72,7 +72,23 @@ pub fn main() !void {
     while (i < MAX_FILE_SIZE) : (i += 1) {
         data[i] = 0xFF;
     }
-   
+
+    // compute crc for first block containing flash second stage
+    //  check sum parameters rp2040 docs 2.8.1.3.1:
+    //      polynomial       = 0x04C11DB7
+    //      initial value    = 0xFFFFFFFF
+    //      final xor        = 0x00000000
+    const Crc32_RP2040 = std.hash.crc.Crc32WithPoly(@intToEnum(std.hash.crc.Polynomial, 0x04_C1_1D_B7));
+    var crc = Crc32_RP2040{ .crc = 0xFF_FF_FF_FF };
+    crc.update(data[0..(UF2Block.PAYLOAD_SIZE-@sizeOf(u32))]);
+    const crc_value = crc.final();
+    // set crc at the end of the block (little-endian)
+    std.mem.copy(
+        u8, 
+        data[(UF2Block.PAYLOAD_SIZE-4)..], 
+        std.mem.asBytes(&crc_value)
+    );
+
     var read_size = try readBin(bin_file_path, data[0..]);
     if (read_size >= MAX_FILE_SIZE) {
         std.log.err("(bin2uf2) bin file {s} size exceeds {}B", .{bin_file_path, MAX_FILE_SIZE});

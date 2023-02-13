@@ -111,7 +111,6 @@ void startup(void) {
 
     XIP_SSI->SSIENR = XIP_SSI_SSIENR_SSI_EN_Msk;
 
-
     uint32_t* src = &__flash_begin;
     uint32_t* dst = &__text_section_begin;
     // copy text and data sections from LMD to VMD (from flash to ram)
@@ -132,7 +131,7 @@ void startup(void) {
     asm(R"asm(
             msr     msp, %[sp]
             bx      %[reset]
-        )asm"
+        )asm" 
         :: [sp] "r" (&__stack_top), [reset] "r" (main)
     );
 
