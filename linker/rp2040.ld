@@ -48,7 +48,7 @@ SECTIONS
         *(vtable)
         *(.data*)
         . = ALIGN(4);
-        __data_section_end = ALIGN(4);
+        __data_section_end = .;
     } > RAM AT> FLASH
 
     .bss : ALIGN(4)
@@ -62,5 +62,5 @@ SECTIONS
 
     PROVIDE(__end = .);
     PROVIDE(__flash_begin = ORIGIN(FLASH));
-    PROVIDE(__stack_top = ORIGIN(RAM) - LENGTH(RAM));
+    PROVIDE(__stack_top = ORIGIN(RAM) + LENGTH(RAM));
 }

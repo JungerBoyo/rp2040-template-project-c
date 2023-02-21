@@ -35,10 +35,12 @@ FALLBACK void irqHandlerI2c0(void);
 FALLBACK void irqHandlerI2c1(void);
 FALLBACK void irqHandlerRtc(void);
 
+void __stack_top(void);
+
 __attribute__((used, section(".vectors"))) 
 void(*const vectors[])(void) = {
-    0,
-    0,
+    __stack_top,        // init stack pointer
+    0,                  // reset IRQ
     irqHandlerNmi,
     irqHandlerHardFault,
     0,
@@ -81,8 +83,6 @@ void(*const vectors[])(void) = {
     irqHandlerRtc
 };
 
-void irqHandlerDefault() { while(1); }
-
 extern int main(void);
 
 extern uint32_t __text_section_begin;
@@ -93,7 +93,8 @@ extern uint32_t __bss_section_begin;
 extern uint32_t __bss_section_end;
 
 extern uint32_t __flash_begin;
-extern uint32_t __stack_top;
+
+void irqHandlerDefault() { while(1); }
 
 __attribute__((naked, used, noreturn, section(".boot.startup")))
 void startup(void) {
@@ -108,6 +109,12 @@ void startup(void) {
         ((32-1) << XIP_SSI_CTRLR0_DFS_32_Pos);
 
     XIP_SSI->CTRLR1 = (0 << XIP_SSI_CTRLR1_NDF_Pos);
+
+    XIP_SSI->SPI_CTRLR0 = 
+        (0x03/*READ_DATA*/ << XIP_SSI_SPI_CTRLR0_XIP_CMD_Pos) |
+        ((24 / 4) << XIP_SSI_SPI_CTRLR0_ADDR_L_Pos) |
+        (XIP_SSI_SPI_CTRLR0_INST_L_8B << XIP_SSI_SPI_CTRLR0_INST_L_Pos) |
+        (XIP_SSI_SPI_CTRLR0_TRANS_TYPE_1C1A << XIP_SSI_SPI_CTRLR0_TRANS_TYPE_Pos);
 
     XIP_SSI->SSIENR = XIP_SSI_SSIENR_SSI_EN_Msk;
 
@@ -127,13 +134,8 @@ void startup(void) {
     // set interrupt vector table
     SCB->VTOR = (uint32_t)vectors;
 
-    // set stack pointer and branch into main
-    asm(R"asm(
-            msr     msp, %[sp]
-            bx      %[reset]
-        )asm" 
-        :: [sp] "r" (&__stack_top), [reset] "r" (main)
-    );
+    // branch into main
+    main();
 
-    __builtin_unreachable();
+    while(1);
 }

@@ -3,7 +3,7 @@ const std = @import("std");
 const FLASH_BEGIN_ADDRESS = 0x10_00_00_00;
 
 // taken from https://microsoft.github.io/uf2/
-const UF2Block = struct {
+const UF2Block = extern struct {
     magic_start_0: u32 = 0x0A_32_46_55,
     magic_start_1: u32 = 0x9E_5D_51_57,
     flags: u32 = FAMILY_ID_FLAG, // family ID present
@@ -33,7 +33,7 @@ fn readBin(bin_file_path: []const u8, buffer: []u8) !usize {
     };
     defer bin_file.close();
 
-    return bin_file.read(buffer[0..]) catch |err| {
+    return bin_file.read(buffer) catch |err| {
         std.log.err("(bin2uf2) failed to read data from file {s}", .{bin_file_path});
         return err;
     };
@@ -64,41 +64,42 @@ pub fn main() !void {
 
     const allocator = std.heap.page_allocator;
     var data = allocator.alloc(u8, MAX_FILE_SIZE) catch |err| {
-        std.log.err("(bin2uf2) failed to alloc {}B", .{MAX_FILE_SIZE});
+        std.log.err("(bin2uf2) failed to alloc {}", .{std.fmt.fmtIntSizeBin(MAX_FILE_SIZE)});
         return err;
     };
     defer allocator.free(data);
-    var i: usize = 0;
-    while (i < MAX_FILE_SIZE) : (i += 1) {
-        data[i] = 0xFF;
+
+    std.mem.set(u8, data, 0xFF);
+
+    var read_size = try readBin(bin_file_path, data);
+    if (read_size >= MAX_FILE_SIZE) {
+        std.log.err("(bin2uf2) bin file {s} size exceeds {}", .{bin_file_path, std.fmt.fmtIntSizeBin(MAX_FILE_SIZE)});
+        return error.BinFileExceedsFlashCapacity;
     }
 
+    // align to payload size
+    read_size += UF2Block.PAYLOAD_SIZE - (read_size % UF2Block.PAYLOAD_SIZE);
+    
     // compute crc for first block containing flash second stage
     //  check sum parameters rp2040 docs 2.8.1.3.1:
     //      polynomial       = 0x04C11DB7
     //      initial value    = 0xFFFFFFFF
     //      final xor        = 0x00000000
-    const Crc32_RP2040 = std.hash.crc.Crc32WithPoly(@intToEnum(std.hash.crc.Polynomial, 0x04_C1_1D_B7));
-    var crc = Crc32_RP2040{ .crc = 0xFF_FF_FF_FF };
-    crc.update(data[0..(UF2Block.PAYLOAD_SIZE-@sizeOf(u32))]);
-    const crc_value = crc.final();
     // set crc at the end of the block (little-endian)
+
+    const Crc32RP2040 = std.hash.crc.Crc(u32, .{
+        .polynomial = 0x04_C1_1D_B7,
+        .initial = 0xFF_FF_FF_FF,
+        .reflect_input = false,
+        .reflect_output = false,
+        .xor_output = 0x0,
+    });
+    const crc_value = Crc32RP2040.hash(data[0..(UF2Block.PAYLOAD_SIZE-4)]);
     std.mem.copy(
         u8, 
-        data[(UF2Block.PAYLOAD_SIZE-4)..], 
+        data[(UF2Block.PAYLOAD_SIZE-4)..(UF2Block.PAYLOAD_SIZE)], 
         std.mem.asBytes(&crc_value)
     );
-
-    var read_size = try readBin(bin_file_path, data[0..]);
-    if (read_size >= MAX_FILE_SIZE) {
-        std.log.err("(bin2uf2) bin file {s} size exceeds {}B", .{bin_file_path, MAX_FILE_SIZE});
-        return error.BinFileExceedsFlashCapacity;
-    }
-
-    read_size += align_to_payload: {
-        const r = read_size % UF2Block.PAYLOAD_SIZE;
-        break :align_to_payload UF2Block.PAYLOAD_SIZE - r;
-    };
 
     const uf2_file = std.fs.cwd().createFile(
         uf2_file_path,
