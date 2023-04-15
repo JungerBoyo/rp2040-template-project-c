@@ -45,64 +45,32 @@ extern uint32_t __data_section_end;
 extern uint32_t __bss_section_begin;
 extern uint32_t __bss_section_end;
 
-#ifndef COPY_CODE_TO_SRAM
-
-extern uint32_t __rodata_section_begin;
-extern uint32_t __rodata_section_end;
-
-#endif
-
 extern uint32_t __flash_begin;
 
 void __stack_top(void);
 
-__attribute__((used, section(".text"))) 
-// __attribute__((used, section(".flash"))) 
+// __attribute__((section(".text"))) 
+__attribute__((section(".flash"))) 
 void irqHandlerReset(void) {
-// #ifdef COPY_CODE_TO_SRAM
-// #ifndef SPI_CONF_GENERIC
-//     uint32_t* src = &__flash_begin;
-//     uint32_t* dst = &__text_section_begin;
-//     // copy text and data sections from LMD to VMD (from flash to sram)
-//     while (dst < &__data_section_end) {
-//         *dst++ = *src++;
-//     }
+#ifdef COPY_CODE_TO_SRAM
+    uint32_t* src = &__flash_begin;
+    uint32_t* dst = &__text_section_begin;
+    // copy text and data sections from LMD to VMD (from flash to sram)
+    while (dst < &__data_section_end) {
+        *dst++ = *src++;
+    }
 
-//     while (XIP_SSI->SR_b.BUSY); // wait for SSI transfer to end
-//     XIP_SSI->SSIENR = 0; // disable SSI after copying code to SRAM
-// #else 
-//     uint32_t* dst = &__data_section_end;
-// #endif
-// #else
-//     // uint32_t* src = (uint32_t*)((uint32_t)(&__flash_begin) + (uint32_t)(&__text_section_end));
-//     // uint32_t* dst = &__rodata_section_begin;
-//     // // copy rodata and data sections from LMD to VMD (from flash to sram)
-//     // while (dst < &__data_section_end) {
-//     //     *dst++ = *src++;
-//     // }
-// #endif
-
-// #ifdef COPY_CODE_TO_SRAM
-//     uint32_t* src = &__flash_begin;
-//     uint32_t* dst = &__text_section_begin;
-//     // copy text and data sections from LMD to VMD (from flash to sram)
-//     while (dst < &__data_section_end) {
-//         *dst++ = *src++;
-//     }
-
-//     while (XIP_SSI->SR_b.BUSY); // wait for SSI transfer to end
-//     XIP_SSI->SSIENR = 0; // disable SSI after copying code to SRAM
-// #else 
-//     uint32_t* dst = &__data_section_end;
-// #endif
-
-    uint32_t* dst = &__data_section_end;
+    // while (XIP_SSI->SR_b.BUSY); // wait for SSI transfer to end
+    // XIP_SSI->SSIENR = 0; // disable SSI after copying code to SRAM
+#endif
+    
+    // uint32_t* dst = &__data_section_end;
     // zero-initialize bss section
     dst = &__bss_section_begin;
     while (dst < &__bss_section_end) {
         *dst++ = 0;
     }
-    // branch into main
+
     main();
 }
 
@@ -204,7 +172,7 @@ void startup(void) {
     
     /* enable SSI */
     XIP_SSI->SSIENR = 1;
-#else
+#else // QSPI
     asm(".thumb            \n"
         "    .syntax unified                    \n"
         "    ldr  r0, =%[_PADS_QSPI]            \n"
@@ -300,7 +268,7 @@ void startup(void) {
     // configure ssi in quad SPI mode + fast read //
     ////////////////////////////////////////////////    
     #define CMD_QUAD_FAST_READ 0xEB             // W25Q16JV docs 9.2.11
-    #define CMD_QUAD_FAST_READ_CONT_BITS 0xA0   // W25Q16JV docs 9.2.11
+    #define CMD_QUAD_FAST_READ_CONT_BITS 0xA0   // W25Q16JV docs 9.2.11?
 
     XIP_SSI->SSIENR = 0; // must disable SSI for the time of configuration
     XIP_SSI->CTRLR0 = (
@@ -342,27 +310,26 @@ void startup(void) {
 
 // code resides in text section, in order to call reset handler 
 // copy text and data to sram
-#ifdef COPY_CODE_TO_SRAM
-// for generic conf XIP doesn't work so perform code copy to sram in boot2
-#ifdef SPI_CONF_GENERIC 
-    uint32_t* src = &__flash_begin;
-    uint32_t* dst = &__text_section_begin;
-    // copy text and data sections from LMD to VMD (from flash to sram)
-    while (dst < &__data_section_end) {
-        *dst++ = *src++;
-    }
+// #ifdef COPY_CODE_TO_SRAM
+//     uint32_t* src = &__flash_begin;
+//     uint32_t* dst = &__text_section_begin;
+//     // copy text and data sections from LMD to VMD (from flash to sram)
+//     while (dst < &__data_section_end) {
+//         *dst++ = *src++;
+//     }
 
-    while (XIP_SSI->SR_b.BUSY); // wait for SSI transfer to end
-    XIP_SSI->SSIENR = 0; // disable SSI after copying code to SRAM
-#else 
-
-#endif
-#endif
+//     // while (XIP_SSI->SR_b.BUSY); // wait for SSI transfer to end
+//     // XIP_SSI->SSIENR = 0; // disable SSI after copying code to SRAM
+// #endif
 
     // set interrupt vector table
-    SCB->VTOR = (uint32_t)vectors;
+    PPB->VTOR = (uint32_t)vectors;
 
-    irqHandlerReset();
-    
-    __builtin_unreachable();
+    asm (
+        "msr msp, %[sp]\n"
+        "bx %[reset]"
+        ::
+        [sp] "r" (__stack_top),
+        [reset] "r" (irqHandlerReset)
+    );
 }

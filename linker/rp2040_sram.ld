@@ -21,25 +21,30 @@ SECTIONS
 {
     .boot : ALIGN(4) 
     {
+
         /* keep void startup(void) function (it is not called by user) 
            and --ffunction-sections --gc-sections are on */
+        __boot_text_section_begin = .;
         KEEP(*(.boot.startup)) 
         *(.boot*)
-        . = 256 - 4;
-        LONG(0xCCCCCCCC);
+        __boot_text_section_end = .;
     } > BOOT 
+
+    ASSERT(__boot_text_section_end - __boot_text_section_begin <= 252, 
+          "ERROR => max boot2 code size is 252B")
 
     .flash : ALIGN(4)
     {
+        KEEP(*(.vectors))
         *(.flash*)
-    } > FLASH
+    } > FLASH 
 
     .text : ALIGN(4) 
     {
         __text_section_begin = .;
         /* keep IRQ handlers definitions even when they are not called 
            by the user */
-        KEEP(*(.vectors))
+        /* KEEP(*(.vectors)) */
         *(.text*)
         *(.rodata)
         *(.rodata.*)
@@ -67,5 +72,6 @@ SECTIONS
 
     PROVIDE(__end = .);
     PROVIDE(__flash_begin = ORIGIN(FLASH));
+    /* (stack grows downwards) */
     PROVIDE(__stack_top = ORIGIN(SRAM) + LENGTH(SRAM));
 }
