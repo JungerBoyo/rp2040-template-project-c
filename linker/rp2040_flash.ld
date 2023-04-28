@@ -5,7 +5,7 @@ __FLASH_ORIGIN = 0x10000100;
 __FLASH_LENGTH = 2048K - 256; /* 2MB - 256B */
 
 __SRAM_ORIGIN = 0x20000000;
-__SRAM_LENGTH = 264K;  /* includes SRAM4 and SRAM5 banks */
+__SRAM_LENGTH = 264K; /* includes SRAM4 and SRAM5 banks */
 
 MEMORY
 {
@@ -29,29 +29,21 @@ SECTIONS
 
     ASSERT (
         __boot_text_section_end - __boot_text_section_begin <= 252, 
-        "ERROR => max boot2 code size is 252B"
+        "ERROR => max boot2 code size is 252B (4B at the end = CRC)"
     )
-
-    .flash : ALIGN(4)
-    {
-        __flash_section_begin = .;
-        KEEP(*(.vectors))
-        *(.flash*)
-        . = ALIGN(4);
-        __flash_section_end = .;
-    } > FLASH 
 
     .text : ALIGN(4) 
     {
         __text_section_begin = .;
         /* keep IRQ handlers definitions even when they are not called 
            by the user */
+        KEEP(*(.vectors))
         *(.text*)
         *(.rodata)
         *(.rodata.*)
         . = ALIGN(4);
         __text_section_end = .;
-    } > SRAM AT> FLASH
+    } > FLASH
 
     .data : ALIGN(4)
     {
@@ -72,7 +64,7 @@ SECTIONS
     } > SRAM
 
     PROVIDE(__end = .);
-    PROVIDE(__flash_copy_to_sram_begin = ORIGIN(FLASH) + (__flash_section_end - __flash_section_begin));
+    PROVIDE(__flash_copy_to_sram_begin = ORIGIN(FLASH) + (__text_section_end - __text_section_begin));
     /* (stack grows downwards) */
     PROVIDE(__stack_top = ORIGIN(SRAM) + LENGTH(SRAM));
 }

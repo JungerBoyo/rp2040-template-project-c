@@ -38,6 +38,17 @@ FALLBACK void irqHandlerRtc(void);
 
 extern int main(void);
 
+__attribute__((section(".text"))) 
+void init() {
+// after copying code to sram there is no need for SPI to be enabled 
+#ifdef COPY_CODE_TO_SRAM
+    while (XIP_SSI->SR_b.BUSY); // wait for SSI transfer to end
+    XIP_SSI->SSIENR = 0; // disable SSI after copying code to SRAM
+#endif
+
+    main();
+}
+
 extern uint32_t __text_section_begin;
 extern uint32_t __text_section_end;
 extern uint32_t __data_section_begin;
@@ -45,33 +56,44 @@ extern uint32_t __data_section_end;
 extern uint32_t __bss_section_begin;
 extern uint32_t __bss_section_end;
 
-extern uint32_t __flash_begin;
+extern uint32_t __flash_copy_to_sram_begin;
 
 void __stack_top(void);
 
-// __attribute__((section(".text"))) 
-__attribute__((section(".flash"))) 
-void irqHandlerReset(void) {
 #ifdef COPY_CODE_TO_SRAM
-    uint32_t* src = &__flash_begin;
+__attribute__((naked, section(".flash"))) 
+#else 
+__attribute__((section(".text"))) 
+#endif
+void irqHandlerReset(void) {
+    
+#ifdef COPY_CODE_TO_SRAM
+    uint32_t* src = &__flash_copy_to_sram_begin;
     uint32_t* dst = &__text_section_begin;
     // copy text and data sections from LMD to VMD (from flash to sram)
     while (dst < &__data_section_end) {
         *dst++ = *src++;
     }
-
-    // while (XIP_SSI->SR_b.BUSY); // wait for SSI transfer to end
-    // XIP_SSI->SSIENR = 0; // disable SSI after copying code to SRAM
+#else 
+    uint32_t* src = &__flash_copy_to_sram_begin;
+    uint32_t* dst = &__data_section_begin;
+    // copy data sections from LMD to VMD (from flash to sram)
+    while (dst < &__data_section_end) {
+        *dst++ = *src++;
+    }
 #endif
     
-    // uint32_t* dst = &__data_section_end;
     // zero-initialize bss section
     dst = &__bss_section_begin;
     while (dst < &__bss_section_end) {
         *dst++ = 0;
     }
 
-    main();
+    asm (
+        "bx %[init]"
+        ::
+        [init] "r" (init)
+    );
 }
 
 __attribute__((used, section(".vectors"))) 
@@ -153,7 +175,7 @@ void startup(void) {
     XIP_SSI->SSIENR = 0;
 
     /* baud rate div 2 minimum */
-    XIP_SSI->BAUDR = 4;
+    XIP_SSI->BAUDR = 2;
     
     XIP_SSI->CTRLR0 = (
         XIP_SSI_CTRLR0_SPI_FRF_STD <<  XIP_SSI_CTRLR0_SPI_FRF_Pos | // STD mode
@@ -161,8 +183,6 @@ void startup(void) {
         31 << XIP_SSI_CTRLR0_DFS_32_Pos // max 32 bits data frame
     );
     
-    XIP_SSI->CTRLR1_b.NDF = 0; // single read
-
     XIP_SSI->SPI_CTRLR0 = (
         0x03 << XIP_SSI_SPI_CTRLR0_XIP_CMD_Pos | // read cmd
         6 << XIP_SSI_SPI_CTRLR0_ADDR_L_Pos | // 24 bits (24 address)    
@@ -170,44 +190,19 @@ void startup(void) {
         XIP_SSI_SPI_CTRLR0_TRANS_TYPE_1C1A <<  XIP_SSI_SPI_CTRLR0_TRANS_TYPE_Pos // cmd in std, address in std 
     );
     
+    XIP_SSI->CTRLR1_b.NDF = 0; // single read
     /* enable SSI */
     XIP_SSI->SSIENR = 1;
 #else // QSPI
-    asm(".thumb            \n"
-        "    .syntax unified                    \n"
-        "    ldr  r0, =%[_PADS_QSPI]            \n"
-        "    movs r1, %[QSPI_SCLK_CONF]         \n"
-        "    str  r1, [r0, %[QSPI_SCLK_OFFSET]] \n"
-        "    ldr  r2, [r0, %[QSPI_SD0_OFFSET]]  \n"
-        "    movs r1, %[QSPI_SDX_SCHMITT_Msk]   \n"
-        "    bics r1, r2                        \n"
-        "    str  r1, [r0, %[QSPI_SD0_OFFSET]]  \n"
-        "    str  r1, [r0, %[QSPI_SD1_OFFSET]]  \n"
-        "    str  r1, [r0, %[QSPI_SD2_OFFSET]]  \n"
-        "    str  r1, [r0, %[QSPI_SD3_OFFSET]]  \n"
-        ::
-        [_PADS_QSPI] "i" (PADS_QSPI_BASE),
-        [QSPI_SCLK_CONF] "i" (
-            PADS_QSPI_GPIO_QSPI_SCLK_DRIVE_8mA << PADS_QSPI_GPIO_QSPI_SCLK_DRIVE_Pos |
-            1 << PADS_QSPI_GPIO_QSPI_SCLK_SLEWFAST_Pos
-        ),
-        [QSPI_SCLK_OFFSET] "i" (offsetof(PADS_QSPI_Type, GPIO_QSPI_SCLK)),
-        [QSPI_SDX_SCHMITT_Msk] "i" (PADS_QSPI_GPIO_QSPI_SD0_SCHMITT_Msk),
-        [QSPI_SD0_OFFSET] "i" (offsetof(PADS_QSPI_Type, GPIO_QSPI_SD0)),
-        [QSPI_SD1_OFFSET] "i" (offsetof(PADS_QSPI_Type, GPIO_QSPI_SD1)),
-        [QSPI_SD2_OFFSET] "i" (offsetof(PADS_QSPI_Type, GPIO_QSPI_SD2)),
-        [QSPI_SD3_OFFSET] "i" (offsetof(PADS_QSPI_Type, GPIO_QSPI_SD3))
+    PADS_QSPI->GPIO_QSPI_SCLK = (
+        PADS_QSPI_GPIO_QSPI_SCLK_DRIVE_8mA << PADS_QSPI_GPIO_QSPI_SCLK_DRIVE_Pos |
+        1 << PADS_QSPI_GPIO_QSPI_SCLK_SLEWFAST_Pos
     );
-     
-    // PADS_QSPI->GPIO_QSPI_SCLK = (
-    //     PADS_QSPI_GPIO_QSPI_SCLK_DRIVE_8mA << PADS_QSPI_GPIO_QSPI_SCLK_DRIVE_Pos |
-    //     1 << PADS_QSPI_GPIO_QSPI_SCLK_SLEWFAST_Pos
-    // );
-    // // disable schmitt trigger to reduce delay
-    // PADS_QSPI->GPIO_QSPI_SD0 &= ~(PADS_QSPI_GPIO_QSPI_SD0_SCHMITT_Msk);
-    // PADS_QSPI->GPIO_QSPI_SD1 &= ~(PADS_QSPI_GPIO_QSPI_SD1_SCHMITT_Msk);
-    // PADS_QSPI->GPIO_QSPI_SD2 &= ~(PADS_QSPI_GPIO_QSPI_SD2_SCHMITT_Msk);
-    // PADS_QSPI->GPIO_QSPI_SD3 &= ~(PADS_QSPI_GPIO_QSPI_SD3_SCHMITT_Msk);
+    // disable schmitt trigger to reduce delay
+    PADS_QSPI->GPIO_QSPI_SD0 &= ~(PADS_QSPI_GPIO_QSPI_SD0_SCHMITT_Msk);
+    PADS_QSPI->GPIO_QSPI_SD1 &= ~(PADS_QSPI_GPIO_QSPI_SD1_SCHMITT_Msk);
+    PADS_QSPI->GPIO_QSPI_SD2 &= ~(PADS_QSPI_GPIO_QSPI_SD2_SCHMITT_Msk);
+    PADS_QSPI->GPIO_QSPI_SD3 &= ~(PADS_QSPI_GPIO_QSPI_SD3_SCHMITT_Msk);
 
     ///////////////////////////////////////////////////////////////////////
     // To enable QSPI, perform write to SR2 (status register 2) setting  //
@@ -216,8 +211,8 @@ void startup(void) {
 
     // configure as TXRX
     XIP_SSI->SSIENR = 0; // must disable SSI for the time of configuration
-    XIP_SSI->BAUDR = 4; // baud rate div 2 minimum
-    // XIP_SSI->RX_SAMPLE_DLY = 1; // one cycle sample delay
+    XIP_SSI->BAUDR = 2; // baud rate div 2 minimum
+    XIP_SSI->RX_SAMPLE_DLY = 1; // one cycle sample delay
     XIP_SSI->CTRLR0 = (
         7 << XIP_SSI_CTRLR0_DFS_32_Pos |  // ssi_data_frame_size 8 bits per frame
         XIP_SSI_CTRLR0_TMOD_TX_AND_RX << XIP_SSI_CTRLR0_TMOD_Pos // ssi_transfer_mode 
@@ -226,7 +221,7 @@ void startup(void) {
 
     #define CMD_READ_SR1     0x05 // W25Q16JV docs 9.2.4
     #define CMD_READ_SR2     0x35 // W25Q16JV docs 9.2.4
-    #define CMD_WRITE_SR2    0x01 // W25Q16JV docs 9.2.5
+    #define CMD_WRITE_SR2    0x31 // W25Q16JV docs 9.2.5
     #define CMD_WRITE_ENABLE 0x06 // W25Q16JV docs 9.2.1
     #define SR2_QE_Msk       0x02 // W25Q16JV docs 8
     #define SR1_BUSY_Msk     0x01 // W25Q16JV docs 7.1
@@ -247,11 +242,11 @@ void startup(void) {
 
         // write to SR
         XIP_SSI->DR0 = CMD_WRITE_SR2;
-        XIP_SSI->DR0 = 0;
+        // XIP_SSI->DR0 = CMD_WRITE_SR2;
         XIP_SSI->DR0 = SR2_QE_Msk;
         waitSSI(); // wait for SSI to complete
         
-        (void)XIP_SSI->DR0; //discard byte
+        // (void)XIP_SSI->DR0; //discard byte
         (void)XIP_SSI->DR0; //discard byte
         (void)XIP_SSI->DR0; //discard byte
 
@@ -307,21 +302,6 @@ void startup(void) {
 
     XIP_SSI->SSIENR = 1;
 #endif
-
-// code resides in text section, in order to call reset handler 
-// copy text and data to sram
-// #ifdef COPY_CODE_TO_SRAM
-//     uint32_t* src = &__flash_begin;
-//     uint32_t* dst = &__text_section_begin;
-//     // copy text and data sections from LMD to VMD (from flash to sram)
-//     while (dst < &__data_section_end) {
-//         *dst++ = *src++;
-//     }
-
-//     // while (XIP_SSI->SR_b.BUSY); // wait for SSI transfer to end
-//     // XIP_SSI->SSIENR = 0; // disable SSI after copying code to SRAM
-// #endif
-
     // set interrupt vector table
     PPB->VTOR = (uint32_t)vectors;
 

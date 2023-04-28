@@ -4,6 +4,7 @@
 #define GPIO2 2
 
 int main(void) {
+
     RESETS->RESET_b.io_bank0 = 0;
     RESETS->RESET_b.pads_bank0 = 0;
 
